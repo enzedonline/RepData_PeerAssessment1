@@ -1,25 +1,321 @@
 ---
 title: "Reproducible Research: Peer Assessment 1"
+author: "Richard Allen"
+date: "28/01/2022"
 output: 
-  html_document:
-    keep_md: true
+  html_document: 
+    toc: yes
+    keep_md: yes
 ---
+```{r}
+# set defaults: cache chunks
+knitr::opts_chunk$set(cache=TRUE)
+```
 
 
 ## Loading and preprocessing the data
 
+The data was obtained by forking the [project git repository](http://github.com/rdpeng/RepData_PeerAssessment1) and unzipping the file 'activity.zip' to ./data/raw and read into dataframe variable `df`.
 
+```{r}
+unzip('activity.zip', exdir = "./data/raw")
+df <- read.csv('./data/raw/activity.csv')
+```
+
+Load the necessary libraries for this report:
+
+```{r}
+library(dplyr)
+library(numform)
+library(lubridate)
+library(ggplot2)
+# set ggplot title default to centre justified
+theme_update(plot.title = element_text(hjust = 0.5))
+
+library(kableExtra)
+library(moments)
+library(cowplot)
+```
+
+The interval column is converted into *HH:mm* format while the date column is converted into date type:
+
+```{r}
+df <- df %>% 
+  mutate(interval = sapply(interval, function(xtime) {
+    xtime <- f_pad_zero(xtime, 4)
+    xtime <- paste0(substr(xtime, 1, 2), ':', substr(xtime, 3, 4))
+  })) %>%
+  mutate(date = as_date(date))
+
+head(df)
+```
 
 ## What is mean total number of steps taken per day?
 
+### Calculate and report the mean, median and total step taken each day
 
+```{r}
+steps_by_day <- df %>% 
+  group_by(date) %>% 
+  summarise(
+    Mean=round(mean(steps, na.rm=T),2), 
+    Median=round(median(steps, na.rm=T),2),
+    Total=sum(steps)
+    ) %>%
+  mutate(Mean = ifelse(is.nan(Mean), NA, Mean))
+
+steps_by_day %>% 
+  kbl() %>% 
+  kable_styling(
+    bootstrap_options = "striped", 
+    full_width = F
+    )
+```
+
+### Make a histogram of the total number of steps taken each day:
+
+```{r}
+hist_withNA <- ggplot(steps_by_day, aes(Total)) + 
+  geom_histogram(bins=8, na.rm=T) +
+  ggtitle("Histogram of Total Steps Each Day") +
+  xlab("Daily Step Count") +
+  ylab("Frequency")
+hist_withNA
+```
 
 ## What is the average daily activity pattern?
 
+### Make a time series plot of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all days (y-axis)
 
+```{r}
+steps_by_interval <- df %>% 
+  group_by(interval) %>% 
+  summarise(
+    Mean=round(mean(steps, na.rm=T),2)
+  )
+
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+
+ggplot(steps_by_interval, aes(y=Mean, x=interval, group=1)) + 
+  geom_line() +
+  ggtitle("Mean Steps by Time Interval") +
+  ylab("Mean Steps per Time Interval") +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_x_discrete(breaks = every_nth(n = 12))
+```
+
+
+### Which 5-minute interval, on average across all the days in the dataset, contains the maximum number of steps?
+
+From the data, the peak mean step count occurs in the 08:35 time interval, part of a sustained peak between 08:00 and 09:20. 
+
+There are smaller peaks at around 12:00, 16:00 and 18:45.
 
 ## Imputing missing values
 
+### Calculate and report the total number of missing values in the dataset (i.e. the total number of rows with `NA`s)
 
+```{r}
+na_count <- sum(is.na(df$steps))
+na_count
+```
+
+There are `r na_count` missing values.
+
+### Devise a strategy for filling in all of the missing values in the dataset. The strategy does not need to be sophisticated. For example, you could use the mean/median for that day, or the mean for that 5-minute interval, etc.
+
+The step count is most likely influenced by both time of day and day of the week (weekday or weekend). 
+
+Solution is to calculate the mean step count of the time interval and week day type that each NA value falls on.
+
+First create a dataframe with those values:
+
+```{r}
+df_day_type <- df
+df_day_type$day_type <- factor(ifelse(wday(df_day_type$date)<6, "Weekday", "Weekend"))
+mean_by_daytype <- df_day_type %>%
+  group_by(day_type, tod=interval) %>%
+  summarise(Mean = mean(steps, na.rm = T))
+```
+
+Then create a function that takes an observation (row) and determines if the step count is NA. If it is, the function above is used to calculate the fill-in value, otherwise the original step count is returned.
+
+```{r}
+get_step_estimate <- function(observation, dmbw) {
+  if (is.na(observation['steps'])){
+    estimate <- dmbw %>% 
+      subset(day_type==observation['day_type'] & tod==observation['interval'])
+    estimate$Mean
+  } else {
+    observation['steps']
+  }
+}
+```
+
+### Create a new dataset that is equal to the original dataset but with the missing data filled in.
+
+Tying these two together using `apply`, we create a new dataframe `df_noNA` with the filled-in values:
+
+```{r}
+df_noNA <- df_day_type %>%
+  mutate(
+    steps = as.numeric(apply(
+      df_day_type, 
+      1, 
+      get_step_estimate, 
+      dmbw=mean_by_daytype
+    ))
+  ) %>%
+  select(-day_type)
+head(df_noNA)
+```
+
+### Make a histogram of the total number of steps taken each day and Calculate and report the mean and median total number of steps taken per day. 
+
+A repeat of the calculation of steps by day needs to be performed on the dataset with calculated values.
+
+```{r}
+steps_by_day_noNA <- df_noNA %>% 
+  group_by(date) %>% 
+  summarise(
+    Mean=round(mean(steps, na.rm=T),2), 
+    Median=round(median(steps, na.rm=T),2),
+    Total=round(sum(steps))
+  )
+```
+
+Show the original histogram alongside the histogram of the new calculated dataset for comparison:
+
+```{r out.width = "100%"}
+# Create the histogram with calculated values
+hist_noNA <- ggplot(steps_by_day_noNA, aes(Total)) + 
+  geom_histogram(bins=8, na.rm=T) +
+  ggtitle("Histogram of Total Steps Each Day") +
+  xlab("Daily Step Count") +
+  ylab("Frequency")
+
+# Find the maximum frequency of both histograms, use the larger as the y axis limit
+# Do this to make a like-for-like sisde by side comparison
+with_NA_max_f <- max(ggplot_build(hist_withNA)$data[[1]]$ymax)
+no_NA_max_f <- max(ggplot_build(hist_noNA)$data[[1]]$ymax)
+y_lim <- max(c(with_NA_max_f, no_NA_max_f))
+
+# Create a plot grid, use as a nested grid under a common title
+hists <- plot_grid(
+  hist_withNA + ylim(0, y_lim+1) + ggtitle("With Missing Values"), 
+  hist_noNA + ylim(0, y_lim+1) + ggtitle("With Calculated Values")
+  )
+
+# Create the common title
+title <- ggdraw() + 
+  draw_label(
+    "Histogram of Total Steps by Day",
+    fontface = 'bold',
+    x = 0,
+    hjust = -0.5
+  ) +
+  theme(
+    plot.margin = margin(0, 0, 0, 0)
+  )
+
+# Show the histograms under common title
+plot_grid(
+  title, hists,
+  ncol = 1,
+  # rel_heights values control vertical title margins
+  rel_heights = c(0.1, 1)
+)
+
+steps_by_day_noNA %>% 
+  kbl() %>% 
+  kable_styling(
+    bootstrap_options = "striped", 
+    full_width = F
+    )
+
+```
+
+### Do these values differ from the estimates from the first part of the assignment? 
+
+The most common daily counts (i.e. the modal values) appear to have been disproportionally stretched, while the tails appear unchanged. Since we are adding average values, this is expected.
+
+The skewness of the data increases for the dataset with calculated values indicating the mean and median have been pulled to the right.This is in keeping with the above observation as the most common values are higher than the mean and median.
+
+```{r}
+skewness(df$steps, na.rm=T)
+skewness(df_noNA$steps)
+```
+
+### What is the impact of imputing missing data on the estimates of the total daily number of steps?
+
+Total number of steps have expectedly risen given that most `NA` values were replaced with values greater than zero.
+
+```{r}
+total_with_na <- sum(df$steps, na.rm = T)
+total_with_na
+total_no_na <- as.integer(sum(df_noNA$steps))
+total_no_na
+```
+
+Total steps with NAs: `r total_with_na`
+
+Total steps with calculated values: `r total_no_na`
+
+Increase: `r total_no_na - total_with_na`
+
+Looking at the increase per day, it appears to have only affected the overall count for days where all values were NA. We can infer (presuming the calculations are correct) that any NA values with partial step counts occurred when the mean step count for that time/day of week were also 0.
+
+```{r}
+raw_step_count <- steps_by_day$Total
+# NA values count zero towards the sum
+raw_step_count[is.na(raw_step_count)] <- 0
+daily_diff <- steps_by_day_noNA$Total - raw_step_count
+daily_diff
+```
 
 ## Are there differences in activity patterns between weekdays and weekends?
+
+### Create a new factor variable in the dataset with two levels – “weekday” and “weekend” indicating whether a given date is a weekday or weekend day.
+
+```{r}
+df$day_type <- factor(ifelse(wday(df$date)<6, "Weekday", "Weekend"))
+head(df)
+
+```
+
+### Make a panel plot containing a time series plot of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all weekday days or weekend days (y-axis). 
+
+```{r out.width = "100%"}
+steps_by_interval <- df %>% 
+  group_by(day_type, interval) %>% 
+  summarise(
+    Mean=round(mean(steps, na.rm=T),2)
+  )
+
+ggplot(steps_by_interval, aes(y=Mean, x=interval, group=1)) + 
+  geom_line() +
+  ggtitle("Mean Steps by Time Interval") +
+  ylab("Mean Steps per Time Interval") +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_x_discrete(breaks = every_nth(n = 12)) +
+  xlab("Time of Day") +
+  facet_wrap(~ day_type, ncol = 1)
+```
+
+The initial comparison shows that weekdays have more activity in the early part of the day (6am - 8am), however the weekends show a bigger peak between 8am and 10am and more sustained activity during the afternoons and early evening.
+
+By looking at the mean total steps each day by weekend or weekday, we can see weekend days are on average approximately 20% more active than weekdays.
+
+```{r}
+df %>% 
+  group_by(day_type) %>% 
+  summarise(
+    Mean=round(mean(steps, na.rm=T),2)
+  )
+```
+
+
+-----
+
