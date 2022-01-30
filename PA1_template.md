@@ -609,7 +609,7 @@ mean_by_daytype <- df_day_type %>%
 ## `summarise()` has grouped output by 'day_type'. You can override using the `.groups` argument.
 ```
 
-Then create a function that takes an observation (row) and determines if the step count is NA. If it is, the function above is used to calculate the fill-in value, otherwise the original step count is returned.
+Then create a function that takes an observation (row) and determines if the step count is NA. If it is, the `mean_by_daytype` dataframe is used to calculate the fill-in value, otherwise the original step count is returned.
 
 
 ```r
